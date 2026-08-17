@@ -2,23 +2,20 @@
 
 Re-sign and upload decrypted Arkadia IPA to App Store Connect / TestFlight using GitHub Actions.
 
-## Workflows
+## Workflow
 
-### 1. Build Assets.car
+**Re-sign & Upload IPA to App Store Connect**
 
-Generates an `Assets.car` containing a complete AppIcon set (all required sizes for iPhone + iPad + App Store).
-
-**Trigger:** Actions > "Build Assets.car" > Run workflow  
-**Output:** `Assets.car` artifact (downloadable, 30-day retention)
-
-### 2. Re-sign & Upload IPA to App Store Connect
-
-Downloads a decrypted IPA, replaces its `Assets.car`, re-signs with the distribution certificate, and uploads to TestFlight.
+1. Downloads the decrypted IPA from the provided URL
+2. Generates all required app icon sizes (iPhone + iPad + App Store 1024x1024) into the bundle root
+3. Updates `Info.plist` with `CFBundleIcons` / `CFBundleIcons~ipad`
+4. Imports the signing certificate into a temporary keychain
+5. Installs the provisioning profile
+6. Re-signs all frameworks, dylibs, and the main app
+7. Uploads to App Store Connect via `xcrun altool` (appears in TestFlight)
 
 **Trigger:** Actions > "Re-sign & Upload IPA to App Store Connect" > Run workflow  
-**Inputs:**
-- `ipa_url` — download URL for the decrypted IPA
-- `assets_car_url` — download URL for the `Assets.car` from the Build Assets.car workflow artifact
+**Input:** `ipa_url` — download URL for the decrypted IPA
 
 ## Required Secrets
 
@@ -33,6 +30,5 @@ Downloads a decrypted IPA, replaces its `Assets.car`, re-signs with the distribu
 
 ## Files
 
-- `.github/workflows/build_assets.yml` — Build Assets.car workflow
-- `.github/workflows/upload_ipa.yml` — Re-sign & Upload workflow
-- `gen_assets.py` — Generates Asset Catalog with all required icon sizes
+- `.github/workflows/upload_ipa.yml` — GitHub Actions workflow
+- `gen_icons.py` — Generates app icon PNGs and updates Info.plist

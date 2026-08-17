@@ -16,7 +16,10 @@ jobs:
 
       - name: Download IPA
         run: |
-          curl -L -o Arkadia.ipa "${{ github.event.inputs.ipa_url }}"
+          curl -L --max-redirs 10 --retry 3 \
+            -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -o Arkadia.ipa "${{ github.event.inputs.ipa_url }}"
+          file Arkadia.ipa
           ls -lh Arkadia.ipa
 
       - name: Import signing certificate
@@ -25,6 +28,7 @@ jobs:
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
         run: |
+          set +e
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
@@ -33,38 +37,50 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" || true
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           rm -f "$CERT_PATH"
           PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
           echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          PROFILE_UUID=$(security cms -D -i "$PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin 2>/dev/null || true)
+          PROFILE_UUID=$(security cms -D -i "$PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin 2>/dev/null)
           if [ -n "$PROFILE_UUID" ]; then
             cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
+            echo "Installed profile UUID: $PROFILE_UUID"
           else
             cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/00c9ed59-e8a8-4776-9f0b-2f42d2d25093.mobileprovision
+            echo "Installed profile with known UUID"
           fi
 
-      - name: Fix IPA & Re-sign
+      - name: Generate icons & Prepare IPA
         env:
-          KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
           PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
         run: |
+          set -e
+          mkdir -p re_sign/Payload
           unzip -q Arkadia.ipa -d re_sign
           APP_BUNDLE=$(find re_sign/Payload -name "*.app" -maxdepth 1 | head -1)
           echo "App bundle: $APP_BUNDLE"
-
+          echo "Removing existing signatures..."
           find "$APP_BUNDLE" -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
           find "$APP_BUNDLE" -name "embedded.mobileprovision" -delete 2>/dev/null || true
           echo "$PROFILE_BASE64" | base64 --decode > "$APP_BUNDLE/embedded.mobileprovision"
+          echo "Generating app icons into bundle root..."
+          python3 gen_icons.py "$APP_BUNDLE"
 
-          echo "=== Assets.car preserved (untouched) ==="
-          ls -lh "$APP_BUNDLE/Assets.car" 2>/dev/null || echo "no Assets.car"
-
-          echo "=== Running fix_ipa.py (icons in bundle root + Info.plist + encryption) ==="
-          python3 fix_ipa.py "$APP_BUNDLE"
-
+      - name: Re-sign IPA
+        env:
+          KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
+        run: |
+          set -e
+          APP_BUNDLE=$(find re_sign/Payload -name "*.app" -maxdepth 1 | head -1)
+          echo "App bundle: $APP_BUNDLE"
+          PLIST="$APP_BUNDLE/Info.plist"
+          if /usr/libexec/PlistBuddy -c "Print UIBackgroundModes" "$PLIST" 2>/dev/null | grep -q "processing"; then
+            echo "Adding BGTaskSchedulerPermittedIdentifiers to Info.plist..."
+            /usr/libexec/PlistBuddy -c "Add :BGTaskSchedulerPermittedIdentifiers array" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :BGTaskSchedulerPermittedIdentifiers:0 string moe.xin.arc.processing" "$PLIST" 2>/dev/null || true
+          fi
           cat > "$RUNNER_TEMP/entitlements.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -79,35 +95,57 @@ jobs:
           </dict>
           </plist>
           PLIST
-
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -1 | awk -F '"' '{print $2}')
           echo "Signing identity: $IDENTITY"
-
-          find "$APP_BUNDLE/Frameworks" -name "*.framework" -type d 2>/dev/null | while read fw; do
+          echo "Signing frameworks..."
+          find "$APP_BUNDLE/Frameworks" -name "*.framework" -type d | while read fw; do
             FW_NAME=$(basename "$fw" .framework)
-            if [ -f "$fw/$FW_NAME" ]; then
-              codesign --force --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --timestamp "$fw/$FW_NAME" || true
+            FW_BINARY="$fw/$FW_NAME"
+            if [ -f "$FW_BINARY" ]; then
+              echo "  Signing $FW_NAME..."
+              codesign --force --sign "$IDENTITY" \
+                --keychain "$KEYCHAIN_PATH" \
+                --timestamp \
+                "$FW_BINARY" || true
             fi
           done
-          find "$APP_BUNDLE" -name "*.dylib" -type f 2>/dev/null | while read dylib; do
-            codesign --force --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --timestamp "$dylib" || true
+          find "$APP_BUNDLE" -name "*.dylib" -type f | while read dylib; do
+            echo "  Signing $(basename $dylib)..."
+            codesign --force --sign "$IDENTITY" \
+              --keychain "$KEYCHAIN_PATH" \
+              --timestamp \
+              "$dylib" || true
           done
-          codesign --force --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --timestamp             --entitlements "$RUNNER_TEMP/entitlements.plist" "$APP_BUNDLE"
-
+          echo "Signing main app..."
+          codesign --force --sign "$IDENTITY" \
+            --keychain "$KEYCHAIN_PATH" \
+            --timestamp \
+            --entitlements "$RUNNER_TEMP/entitlements.plist" \
+            "$APP_BUNDLE"
+          echo "Verifying signature..."
+          codesign --verify --verbose "$APP_BUNDLE" || true
+          echo "Creating new IPA..."
           cd re_sign
           zip -r -q ../Arkadia-resigned.ipa Payload
           cd ..
+          echo "Re-signed IPA created: Arkadia-resigned.ipa"
           ls -lh Arkadia-resigned.ipa
 
-      - name: Upload to TestFlight
+      - name: Upload via altool
         env:
           ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           API_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: |
           mkdir -p ~/private_keys
-          echo "$API_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
-          xcrun altool --upload-app --type ios --file Arkadia-resigned.ipa --apiKey $KEY_ID --apiIssuer $ISSUER_ID
+          cat > ~/private_keys/AuthKey_${KEY_ID}.p8 <<EOF
+          ${API_KEY}
+          EOF
+          xcrun altool --upload-app \
+            --type ios \
+            --file Arkadia-resigned.ipa \
+            --apiKey $KEY_ID \
+            --apiIssuer $ISSUER_ID
 
       - name: Cleanup
         if: always()
