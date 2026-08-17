@@ -215,41 +215,28 @@ def build_asset_catalog(app_bundle):
         print(f"  Existing Assets.car: {os.path.getsize(existing_car)} bytes")
 
     print("  Compiling Asset Catalog with actool (Xcode 14+ universal format)...")
+
     try:
-        find_result = subprocess.run(['xcrun', '--find', 'actool'], capture_output=True, text=True, check=True)
-        actool_path = find_result.stdout.strip()
-        print(f"  actool path: {actool_path}")
+        help_result = subprocess.run('xcrun actool --help 2>&1 | head -30', shell=True, capture_output=True, text=True)
+        print(f"  actool --help (first 30 lines): {help_result.stdout[:500]}")
     except Exception:
-        actool_path = 'xcrun'
+        pass
 
-    if actool_path and actool_path != 'xcrun':
-        cmd = [
-            actool_path,
-            '--output-format', 'human-readable-text',
-            '--minimum-deployment-target', '13.0',
-            '--platform', 'iphoneos',
-            '--target-device', 'iphone',
-            '--target-device', 'ipad',
-            '--compile',
-            '--output', output_dir,
-            xcassets,
-        ]
-    else:
-        cmd = [
-            'xcrun', 'actool',
-            '--output-format', 'human-readable-text',
-            '--minimum-deployment-target', '13.0',
-            '--platform', 'iphoneos',
-            '--target-device', 'iphone',
-            '--target-device', 'ipad',
-            '--compile',
-            '--output', output_dir,
-            xcassets,
-        ]
-    print(f"  cmd: {' '.join(cmd)}")
+    cmd_str = (
+        f'xcrun actool '
+        f'--output-format human-readable-text '
+        f'--minimum-deployment-target 13.0 '
+        f'--platform iphoneos '
+        f'--target-device iphone '
+        f'--target-device ipad '
+        f'--compile '
+        f'--output "{output_dir}" '
+        f'"{xcassets}"'
+    )
+    print(f"  cmd: {cmd_str}")
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd_str, shell=True, check=True, capture_output=True, text=True)
         print(f"  actool stdout: {result.stdout.strip()}")
         if result.stderr.strip():
             print(f"  actool stderr: {result.stderr.strip()}")
@@ -257,12 +244,50 @@ def build_asset_catalog(app_bundle):
         print(f"  actool FAILED (exit {e.returncode})")
         print(f"  stdout: {e.stdout}")
         print(f"  stderr: {e.stderr}")
-        shutil.rmtree(tmp, ignore_errors=True)
-        return False
-    except FileNotFoundError:
-        print("  actool not available")
-        shutil.rmtree(tmp, ignore_errors=True)
-        return False
+
+        print("  Retrying with --output=<dir> format...")
+        cmd_str2 = (
+            f'xcrun actool '
+            f'--output-format human-readable-text '
+            f'--minimum-deployment-target 13.0 '
+            f'--platform iphoneos '
+            f'--compile '
+            f'--output="{output_dir}" '
+            f'"{xcassets}"'
+        )
+        print(f"  cmd: {cmd_str2}")
+        try:
+            result = subprocess.run(cmd_str2, shell=True, check=True, capture_output=True, text=True)
+            print(f"  actool stdout: {result.stdout.strip()}")
+            if result.stderr.strip():
+                print(f"  actool stderr: {result.stderr.strip()}")
+        except subprocess.CalledProcessError as e2:
+            print(f"  actool FAILED again (exit {e2.returncode})")
+            print(f"  stdout: {e2.stdout}")
+            print(f"  stderr: {e2.stderr}")
+
+            print("  Retrying with cd to output dir...")
+            cmd_str3 = (
+                f'cd "{output_dir}" && '
+                f'xcrun actool '
+                f'--output-format human-readable-text '
+                f'--minimum-deployment-target 13.0 '
+                f'--platform iphoneos '
+                f'--compile '
+                f'"{xcassets}"'
+            )
+            print(f"  cmd: {cmd_str3}")
+            try:
+                result = subprocess.run(cmd_str3, shell=True, check=True, capture_output=True, text=True)
+                print(f"  actool stdout: {result.stdout.strip()}")
+                if result.stderr.strip():
+                    print(f"  actool stderr: {result.stderr.strip()}")
+            except subprocess.CalledProcessError as e3:
+                print(f"  actool FAILED all attempts (exit {e3.returncode})")
+                print(f"  stdout: {e3.stdout}")
+                print(f"  stderr: {e3.stderr}")
+                shutil.rmtree(tmp, ignore_errors=True)
+                return False
 
     car_path = os.path.join(output_dir, 'Assets.car')
     if os.path.exists(car_path):
