@@ -6,24 +6,18 @@ on:
       ipa_url:
         description: 'IPA download URL'
         required: true
-      assets_car_url:
-        description: 'Assets.car download URL (patched, from Build Assets.car workflow artifact)'
-        required: true
 
 jobs:
   upload:
     name: Re-sign & Upload
     runs-on: macos-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download IPA
         run: |
           curl -L -o Arkadia.ipa "${{ github.event.inputs.ipa_url }}"
           ls -lh Arkadia.ipa
-
-      - name: Download Assets.car
-        run: |
-          curl -L -o Assets.car "${{ github.event.inputs.assets_car_url }}"
-          ls -lh Assets.car
 
       - name: Import signing certificate
         env:
@@ -52,7 +46,7 @@ jobs:
             cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/00c9ed59-e8a8-4776-9f0b-2f42d2d25093.mobileprovision
           fi
 
-      - name: Replace Assets.car & Re-sign
+      - name: Fix IPA & Re-sign
         env:
           KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
           PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
@@ -65,9 +59,11 @@ jobs:
           find "$APP_BUNDLE" -name "embedded.mobileprovision" -delete 2>/dev/null || true
           echo "$PROFILE_BASE64" | base64 --decode > "$APP_BUNDLE/embedded.mobileprovision"
 
-          echo "Replacing Assets.car..."
-          cp Assets.car "$APP_BUNDLE/Assets.car"
-          ls -lh "$APP_BUNDLE/Assets.car"
+          echo "=== Assets.car preserved (untouched) ==="
+          ls -lh "$APP_BUNDLE/Assets.car" 2>/dev/null || echo "no Assets.car"
+
+          echo "=== Running fix_ipa.py (icons in bundle root + Info.plist + encryption) ==="
+          python3 fix_ipa.py "$APP_BUNDLE"
 
           cat > "$RUNNER_TEMP/entitlements.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>

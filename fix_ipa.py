@@ -122,9 +122,10 @@ def fix_info_plist(plist_path, app_bundle):
         except ValueError:
             pass
 
-    plist['CFBundleIconName'] = 'AppIcon'
-    print(f"  Set CFBundleIconName = AppIcon")
-    changed = True
+    if 'CFBundleIconName' in plist:
+        del plist['CFBundleIconName']
+        print(f"  Removed CFBundleIconName (using root icon files instead of Assets.car)")
+        changed = True
 
     plist['UIDeviceFamily'] = [1, 2]
     print(f"  Set UIDeviceFamily = [1, 2]")
@@ -344,8 +345,6 @@ def main():
     print("Installing icon files in bundle root")
     install_icon_files(app_bundle)
 
-    print("Building Asset Catalog (replacing Assets.car)")
-    build_asset_catalog(app_bundle)
 
     print("Done!")
 
