@@ -217,8 +217,8 @@ def build_asset_catalog(app_bundle):
     print("  Compiling Asset Catalog with actool (Xcode 14+ universal format)...")
 
     try:
-        help_result = subprocess.run('xcrun actool --help 2>&1 | head -30', shell=True, capture_output=True, text=True)
-        print(f"  actool --help (first 30 lines): {help_result.stdout[:500]}")
+        help_result = subprocess.run('xcrun actool --help 2>&1 | head -50', shell=True, capture_output=True, text=True)
+        print(f"  actool --help: {help_result.stdout[:1000]}")
     except Exception:
         pass
 
@@ -230,7 +230,7 @@ def build_asset_catalog(app_bundle):
         f'--target-device iphone '
         f'--target-device ipad '
         f'--compile '
-        f'--output "{output_dir}" '
+        f'"{output_dir}" '
         f'"{xcassets}"'
     )
     print(f"  cmd: {cmd_str}")
@@ -245,15 +245,15 @@ def build_asset_catalog(app_bundle):
         print(f"  stdout: {e.stdout}")
         print(f"  stderr: {e.stderr}")
 
-        print("  Retrying with --output=<dir> format...")
+        print("  Retrying with input before output...")
         cmd_str2 = (
             f'xcrun actool '
             f'--output-format human-readable-text '
             f'--minimum-deployment-target 13.0 '
             f'--platform iphoneos '
             f'--compile '
-            f'--output="{output_dir}" '
-            f'"{xcassets}"'
+            f'"{xcassets}" '
+            f'"{output_dir}"'
         )
         print(f"  cmd: {cmd_str2}")
         try:
@@ -262,32 +262,11 @@ def build_asset_catalog(app_bundle):
             if result.stderr.strip():
                 print(f"  actool stderr: {result.stderr.strip()}")
         except subprocess.CalledProcessError as e2:
-            print(f"  actool FAILED again (exit {e2.returncode})")
+            print(f"  actool FAILED (exit {e2.returncode})")
             print(f"  stdout: {e2.stdout}")
             print(f"  stderr: {e2.stderr}")
-
-            print("  Retrying with cd to output dir...")
-            cmd_str3 = (
-                f'cd "{output_dir}" && '
-                f'xcrun actool '
-                f'--output-format human-readable-text '
-                f'--minimum-deployment-target 13.0 '
-                f'--platform iphoneos '
-                f'--compile '
-                f'"{xcassets}"'
-            )
-            print(f"  cmd: {cmd_str3}")
-            try:
-                result = subprocess.run(cmd_str3, shell=True, check=True, capture_output=True, text=True)
-                print(f"  actool stdout: {result.stdout.strip()}")
-                if result.stderr.strip():
-                    print(f"  actool stderr: {result.stderr.strip()}")
-            except subprocess.CalledProcessError as e3:
-                print(f"  actool FAILED all attempts (exit {e3.returncode})")
-                print(f"  stdout: {e3.stdout}")
-                print(f"  stderr: {e3.stderr}")
-                shutil.rmtree(tmp, ignore_errors=True)
-                return False
+            shutil.rmtree(tmp, ignore_errors=True)
+            return False
 
     car_path = os.path.join(output_dir, 'Assets.car')
     if os.path.exists(car_path):
