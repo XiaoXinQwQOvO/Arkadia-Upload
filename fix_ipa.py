@@ -181,24 +181,52 @@ def install_icon_files(app_bundle):
 
 
 def build_asset_catalog(app_bundle):
-    """Build Asset Catalog with 1024x1024 universal icon and replace Assets.car."""
+    """Build Asset Catalog with explicit icon sizes and replace Assets.car."""
     tmp = tempfile.mkdtemp(prefix='assetcat_')
     xcassets = os.path.join(tmp, 'Assets.xcassets')
     appiconset = os.path.join(xcassets, 'AppIcon.appiconset')
     os.makedirs(appiconset, exist_ok=True)
 
-    with open(os.path.join(appiconset, 'icon-1024.png'), 'wb') as f:
-        f.write(make_png(1024, 1024))
+    icon_files = {
+        'icon-29.png': 29,
+        'icon-29@2x.png': 58,
+        'icon-29@3x.png': 87,
+        'icon-40.png': 40,
+        'icon-40@2x.png': 80,
+        'icon-40@3x.png': 120,
+        'icon-60@2x.png': 120,
+        'icon-60@3x.png': 180,
+        'icon-76.png': 76,
+        'icon-76@2x.png': 152,
+        'icon-83.5@2x.png': 167,
+        'icon-1024.png': 1024,
+    }
+
+    for name, px in icon_files.items():
+        with open(os.path.join(appiconset, name), 'wb') as f:
+            f.write(make_png(px, px))
+
+    images = [
+        {"filename": "icon-29.png", "idiom": "iphone", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "iphone", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-29@3x.png", "idiom": "iphone", "scale": "3x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "iphone", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "iphone", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-40@3x.png", "idiom": "iphone", "scale": "3x", "size": "40x40"},
+        {"filename": "icon-60@2x.png", "idiom": "iphone", "scale": "2x", "size": "60x60"},
+        {"filename": "icon-60@3x.png", "idiom": "iphone", "scale": "3x", "size": "60x60"},
+        {"filename": "icon-29.png", "idiom": "ipad", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "ipad", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "ipad", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "ipad", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-76.png", "idiom": "ipad", "scale": "1x", "size": "76x76"},
+        {"filename": "icon-76@2x.png", "idiom": "ipad", "scale": "2x", "size": "76x76"},
+        {"filename": "icon-83.5@2x.png", "idiom": "ipad", "scale": "2x", "size": "83.5x83.5"},
+        {"filename": "icon-1024.png", "idiom": "ios-marketing", "scale": "1x", "size": "1024x1024"},
+    ]
 
     contents_json = {
-        "images": [
-            {
-                "filename": "icon-1024.png",
-                "idiom": "universal",
-                "platform": "ios",
-                "size": "1024x1024"
-            }
-        ],
+        "images": images,
         "info": {"author": "xcode", "version": 1}
     }
     with open(os.path.join(appiconset, 'Contents.json'), 'w') as f:
