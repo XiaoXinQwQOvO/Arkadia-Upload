@@ -1,0 +1,13 @@
+证书/
+KDX-Upload-ref/
+.arts/
+.codeartsdoer/
+*.ipa
+*.dylib
+__pycache__/
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.key
+*.csr
