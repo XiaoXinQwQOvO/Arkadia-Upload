@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       assets_car_url:
-        description: 'Original Assets.car download URL (optional, for reference)'
+        description: 'Existing Assets.car download URL (skip actool, use directly)'
         required: false
 
 jobs:
@@ -14,28 +14,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download original Assets.car
+      - name: Use existing Assets.car
         if: ${{ github.event.inputs.assets_car_url != '' }}
         run: |
-          curl -L -o original.car "${{ github.event.inputs.assets_car_url }}"
-          ls -lh original.car
-          xcrun --sdk iphoneos assetutil --info original.car 2>/dev/null | head -30 || true
+          mkdir -p output
+          curl -L -o output/Assets.car "${{ github.event.inputs.assets_car_url }}"
+          ls -lh output/Assets.car
+          echo "Bytes: $(wc -c < output/Assets.car)"
+          [ "$(wc -c < output/Assets.car)" -gt 1000 ] || { echo "Downloaded file too small"; exit 1; }
+          xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -20 || true
 
       - name: Create Asset Catalog
+        if: ${{ github.event.inputs.assets_car_url == '' }}
         run: python3 gen_assets.py Assets.xcassets
 
       - name: Compile with actool
+        if: ${{ github.event.inputs.assets_car_url == '' }}
         run: |
           mkdir -p output
           echo "xcode: $(xcodebuild -version 2>/dev/null)"
-          echo "actool: $(xcrun --find actool 2>/dev/null)"
 
-          echo "=== Standard invocation ==="
+          echo "=== actool with --output-partial-info-plist ==="
           xcrun actool Assets.xcassets \
             --compile output \
             --platform iphoneos \
             --minimum-deployment-target 13.0 \
             --app-icon AppIcon \
+            --output-partial-info-plist output/partial-info.plist \
             --target-device iphone \
             --target-device ipad \
             --warnings --errors 2>&1 || true
@@ -50,22 +55,13 @@ jobs:
               --compile output \
               --platform iphoneos \
               --minimum-deployment-target 13.0 \
-              --app-icon AppIcon 2>&1 || true
+              --app-icon AppIcon \
+              --output-partial-info-plist output/partial-info.plist 2>&1 || true
             find output -type f -ls 2>/dev/null || true
-          fi
-
-          if [ ! -f output/Assets.car ] || [ "$(wc -c < output/Assets.car 2>/dev/null)" -lt 100 ]; then
-            echo "=== Fallback: search entire filesystem for Assets.car ==="
-            FOUND=$(find / -name "Assets.car" -newer gen_assets.py 2>/dev/null | head -1)
-            if [ -n "$FOUND" ]; then
-              echo "Found: $FOUND ($(wc -c < "$FOUND") bytes)"
-              cp "$FOUND" output/Assets.car
-            fi
           fi
 
           [ -f output/Assets.car ] && [ "$(wc -c < output/Assets.car)" -gt 100 ] || { echo "FAILED: no Assets.car produced"; exit 1; }
           echo "SUCCESS: $(wc -c < output/Assets.car) bytes"
-          xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -20 || true
 
       - uses: actions/upload-artifact@v4
         with:
