@@ -50,6 +50,7 @@ def fix_encryption(path):
     sizeofcmds = struct.unpack_from('<I', data, 20)[0]
     header_size = 32
 
+    text_fileoff = 0
     text_filesize = 0
     enc_offset = -1
     enc_cmdsize = 0
@@ -59,10 +60,12 @@ def fix_encryption(path):
         cmd, cmdsize = struct.unpack_from('<II', data, offset)
         if cmd == 0x19:  # LC_SEGMENT_64
             segname = data[offset + 8:offset + 24].rstrip(b'\x00').decode('utf-8', errors='replace')
-            filesize = struct.unpack_from('<Q', data, offset + 56)[0]
+            fileoff = struct.unpack_from('<Q', data, offset + 40)[0]
+            filesize = struct.unpack_from('<Q', data, offset + 48)[0]
             if segname == '__TEXT':
+                text_fileoff = fileoff
                 text_filesize = filesize
-                print(f"  __TEXT filesize = {text_filesize} (0x{text_filesize:x})")
+                print(f"  __TEXT: fileoff=0x{fileoff:x} filesize=0x{filesize:x}")
         elif cmd in (0x21, 0x2C):
             lc_name = "LC_ENCRYPTION_INFO_64" if cmd == 0x2C else "LC_ENCRYPTION_INFO"
             old_cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
@@ -77,10 +80,12 @@ def fix_encryption(path):
         print(f"  No encryption LC found, skipping")
         return False
 
-    new_cryptoff = PAGE_SIZE
+    new_cryptoff = text_fileoff + PAGE_SIZE
     new_cryptsize = text_filesize - PAGE_SIZE
     if new_cryptsize < 0:
         new_cryptsize = 0
+    if new_cryptsize > 0xFFFFFFFF:
+        new_cryptsize = 0xFFFFFFFF
     new_cryptid = 0
 
     print(f"  Setting: cryptoff=0x{new_cryptoff:x} cryptsize=0x{new_cryptsize:x} cryptid={new_cryptid}")
