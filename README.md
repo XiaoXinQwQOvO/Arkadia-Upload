@@ -1,13 +1,24 @@
 # Arkadia Upload
 
-Re-sign and upload Arkadia IPA to App Store Connect / TestFlight using GitHub Actions.
+Re-sign and upload decrypted Arkadia IPA to App Store Connect / TestFlight using GitHub Actions.
 
-## Setup
+## Workflows
 
-1. Place `Arkadia.ipa` at a downloadable URL (or upload to repo root)
-2. Go to Actions > "Re-sign & Upload IPA to App Store Connect" > Run workflow
-3. Enter the IPA download URL
-4. Wait for the workflow to finish — the IPA will be uploaded to TestFlight
+### 1. Build Assets.car
+
+Generates an `Assets.car` containing a complete AppIcon set (all required sizes for iPhone + iPad + App Store).
+
+**Trigger:** Actions > "Build Assets.car" > Run workflow  
+**Output:** `Assets.car` artifact (downloadable, 30-day retention)
+
+### 2. Re-sign & Upload IPA to App Store Connect
+
+Downloads a decrypted IPA, replaces its `Assets.car`, re-signs with the distribution certificate, and uploads to TestFlight.
+
+**Trigger:** Actions > "Re-sign & Upload IPA to App Store Connect" > Run workflow  
+**Inputs:**
+- `ipa_url` — download URL for the decrypted IPA
+- `assets_car_url` — download URL for the `Assets.car` from the Build Assets.car workflow artifact
 
 ## Required Secrets
 
@@ -20,15 +31,8 @@ Re-sign and upload Arkadia IPA to App Store Connect / TestFlight using GitHub Ac
 | `APPLE_API_KEY_ID` | App Store Connect API Key ID |
 | `APPLE_API_PRIVATE_KEY` | Contents of the `AuthKey_XXXXX.p8` file |
 
-## What it does
-
-1. Downloads the IPA from the provided URL
-2. Imports the signing certificate into a temporary keychain
-3. Installs the provisioning profile
-4. Re-signs all frameworks, dylibs, and the main app
-5. Packages the re-signed IPA
-6. Uploads to App Store Connect via `xcrun altool` (appears in TestFlight)
-
 ## Files
 
-- `.github/workflows/upload_ipa.yml` — GitHub Actions workflow
+- `.github/workflows/build_assets.yml` — Build Assets.car workflow
+- `.github/workflows/upload_ipa.yml` — Re-sign & Upload workflow
+- `gen_assets.py` — Generates Asset Catalog with all required icon sizes

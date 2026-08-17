@@ -27,28 +27,45 @@ jobs:
       - name: Compile with actool
         run: |
           mkdir -p output
-          ACTOOL=$(xcrun --find actool 2>/dev/null)
-          echo "actool: $ACTOOL"
           echo "xcode: $(xcodebuild -version 2>/dev/null)"
-          CMDS=(
-            "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile --app-icon AppIcon output Assets.xcassets"
-            "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile output Assets.xcassets"
-            "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile Assets.xcassets output"
-            "$ACTOOL --platform iphoneos --minimum-deployment-target 13.0 --compile --app-icon AppIcon output Assets.xcassets"
-            "$ACTOOL --platform iphoneos --minimum-deployment-target 13.0 --compile output Assets.xcassets"
-          )
-          for cmd in "${CMDS[@]}"; do
-            echo "=== $cmd ==="
-            eval "$cmd" 2>&1
-            FOUND=$(find output /var/folders -name "Assets.car" -newer Assets.xcassets 2>/dev/null | head -1)
-            if [ -n "$FOUND" ] && [ "$(wc -c < "$FOUND")" -gt 100 ]; then
+          echo "actool: $(xcrun --find actool 2>/dev/null)"
+
+          echo "=== Standard invocation ==="
+          xcrun actool Assets.xcassets \
+            --compile output \
+            --platform iphoneos \
+            --minimum-deployment-target 13.0 \
+            --app-icon AppIcon \
+            --target-device iphone \
+            --target-device ipad \
+            --warnings --errors 2>&1 || true
+
+          echo "--- output dir contents ---"
+          find output -type f -ls 2>/dev/null || true
+
+          if [ ! -f output/Assets.car ] || [ "$(wc -c < output/Assets.car 2>/dev/null)" -lt 100 ]; then
+            echo "=== Fallback: no --target-device ==="
+            rm -rf output && mkdir -p output
+            xcrun actool Assets.xcassets \
+              --compile output \
+              --platform iphoneos \
+              --minimum-deployment-target 13.0 \
+              --app-icon AppIcon 2>&1 || true
+            find output -type f -ls 2>/dev/null || true
+          fi
+
+          if [ ! -f output/Assets.car ] || [ "$(wc -c < output/Assets.car 2>/dev/null)" -lt 100 ]; then
+            echo "=== Fallback: search entire filesystem for Assets.car ==="
+            FOUND=$(find / -name "Assets.car" -newer gen_assets.py 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "Found: $FOUND ($(wc -c < "$FOUND") bytes)"
               cp "$FOUND" output/Assets.car
-              echo "SUCCESS: $(wc -c < output/Assets.car) bytes"
-              xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -20 || true
-              break
             fi
-          done
-          [ -f output/Assets.car ] || { echo "FAILED"; exit 1; }
+          fi
+
+          [ -f output/Assets.car ] && [ "$(wc -c < output/Assets.car)" -gt 100 ] || { echo "FAILED: no Assets.car produced"; exit 1; }
+          echo "SUCCESS: $(wc -c < output/Assets.car) bytes"
+          xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -20 || true
 
       - uses: actions/upload-artifact@v4
         with:
