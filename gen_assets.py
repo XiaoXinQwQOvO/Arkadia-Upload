@@ -46,9 +46,11 @@ def main():
     ]
     with open(os.path.join(d,'Contents.json'),'w') as f:
         json.dump({'images':images,'info':{'author':'xcode','version':1}}, f, indent=2)
-    with open(os.path.join(out,'Contents.json'),'w') as f:
-        json.dump({'info':{'author':'xcode','version':1}}, f, indent=2)
-    print('Asset Catalog created at ' + out)
+    root_contents = os.path.join(out, 'Contents.json')
+    if not os.path.exists(root_contents):
+        with open(root_contents, 'w') as f:
+            json.dump({'info': {'author': 'xcode', 'version': 1}}, f, indent=2)
+    print('Asset Catalog ready at ' + out + ' (AppIcon added/replaced)')
 
 if __name__ == '__main__':
     main()
