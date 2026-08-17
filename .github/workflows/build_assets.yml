@@ -3,164 +3,52 @@ name: Build Assets.car
 on:
   workflow_dispatch:
     inputs:
-      icon_color:
-        description: 'Icon background color (hex without #, e.g. 5078C8)'
+      assets_car_url:
+        description: 'Original Assets.car download URL (optional, for reference)'
         required: false
-        default: '5078C8'
 
 jobs:
   build:
     name: Build Assets.car
     runs-on: macos-latest
     steps:
-      - name: Generate Asset Catalog
+      - uses: actions/checkout@v4
+
+      - name: Download original Assets.car
+        if: ${{ github.event.inputs.assets_car_url != '' }}
         run: |
-          mkdir -p Assets.xcassets/AppIcon.appiconset
+          curl -L -o original.car "${{ github.event.inputs.assets_car_url }}"
+          ls -lh original.car
+          xcrun --sdk iphoneos assetutil --info original.car 2>/dev/null | head -30 || true
 
-          python3 -c "
-          import struct, zlib, json, os
-
-          def make_png(width, height, rgba=(80, 120, 200, 255)):
-              def chunk(typ, data):
-                  return struct.pack('>I', len(data)) + typ + data + struct.pack('>I', zlib.crc32(typ + data) & 0xffffffff)
-              sig = b'\x89PNG\r\n\x1a\n'
-              ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
-              row = b'\x00' + bytes(rgba) * width
-              raw = row * height
-              idat = chunk(b'IDAT', zlib.compress(raw, 9))
-              iend = chunk(b'IEND', b'')
-              return sig + ihdr + idat + iend
-
-          icons = {
-              'icon-29.png': 29, 'icon-29@2x.png': 58, 'icon-29@3x.png': 87,
-              'icon-40.png': 40, 'icon-40@2x.png': 80, 'icon-40@3x.png': 120,
-              'icon-60@2x.png': 120, 'icon-60@3x.png': 180,
-              'icon-76.png': 76, 'icon-76@2x.png': 152, 'icon-83.5@2x.png': 167,
-              'icon-1024.png': 1024,
-          }
-          d = 'Assets.xcassets/AppIcon.appiconset'
-          for name, px in icons.items():
-              with open(os.path.join(d, name), 'wb') as f:
-                  f.write(make_png(px, px))
-
-          images = [
-              {'filename': 'icon-29.png', 'idiom': 'iphone', 'scale': '1x', 'size': '29x29'},
-              {'filename': 'icon-29@2x.png', 'idiom': 'iphone', 'scale': '2x', 'size': '29x29'},
-              {'filename': 'icon-29@3x.png', 'idiom': 'iphone', 'scale': '3x', 'size': '29x29'},
-              {'filename': 'icon-40.png', 'idiom': 'iphone', 'scale': '1x', 'size': '40x40'},
-              {'filename': 'icon-40@2x.png', 'idiom': 'iphone', 'scale': '2x', 'size': '40x40'},
-              {'filename': 'icon-40@3x.png', 'idiom': 'iphone', 'scale': '3x', 'size': '40x40'},
-              {'filename': 'icon-60@2x.png', 'idiom': 'iphone', 'scale': '2x', 'size': '60x60'},
-              {'filename': 'icon-60@3x.png', 'idiom': 'iphone', 'scale': '3x', 'size': '60x60'},
-              {'filename': 'icon-29.png', 'idiom': 'ipad', 'scale': '1x', 'size': '29x29'},
-              {'filename': 'icon-29@2x.png', 'idiom': 'ipad', 'scale': '2x', 'size': '29x29'},
-              {'filename': 'icon-40.png', 'idiom': 'ipad', 'scale': '1x', 'size': '40x40'},
-              {'filename': 'icon-40@2x.png', 'idiom': 'ipad', 'scale': '2x', 'size': '40x40'},
-              {'filename': 'icon-76.png', 'idiom': 'ipad', 'scale': '1x', 'size': '76x76'},
-              {'filename': 'icon-76@2x.png', 'idiom': 'ipad', 'scale': '2x', 'size': '76x76'},
-              {'filename': 'icon-83.5@2x.png', 'idiom': 'ipad', 'scale': '2x', 'size': '83.5x83.5'},
-              {'filename': 'icon-1024.png', 'idiom': 'ios-marketing', 'scale': '1x', 'size': '1024x1024'},
-          ]
-          with open(os.path.join(d, 'Contents.json'), 'w') as f:
-              json.dump({'images': images, 'info': {'author': 'xcode', 'version': 1}}, f, indent=2)
-          with open('Assets.xcassets/Contents.json', 'w') as f:
-              json.dump({'info': {'author': 'xcode', 'version': 1}}, f, indent=2)
-          print('Asset Catalog created')
-          "
-
-          echo "=== Contents.json ==="
-          cat Assets.xcassets/AppIcon.appiconset/Contents.json
-          echo ""
-          echo "=== Files ==="
-          ls -la Assets.xcassets/AppIcon.appiconset/
+      - name: Create Asset Catalog
+        run: python3 gen_assets.py Assets.xcassets
 
       - name: Compile with actool
         run: |
           mkdir -p output
           ACTOOL=$(xcrun --find actool 2>/dev/null)
-          echo "actool path: $ACTOOL"
-          echo "xcode version: $(xcodebuild -version 2>/dev/null)"
-
-          ATTEMPTS=(
+          echo "actool: $ACTOOL"
+          echo "xcode: $(xcodebuild -version 2>/dev/null)"
+          CMDS=(
             "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile --app-icon AppIcon output Assets.xcassets"
             "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile output Assets.xcassets"
             "xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile Assets.xcassets output"
             "$ACTOOL --platform iphoneos --minimum-deployment-target 13.0 --compile --app-icon AppIcon output Assets.xcassets"
             "$ACTOOL --platform iphoneos --minimum-deployment-target 13.0 --compile output Assets.xcassets"
           )
-
-          for i in "${!ATTEMPTS[@]}"; do
-            cmd="${ATTEMPTS[$i]}"
-            echo ""
-            echo "=== Attempt $((i+1)) ==="
-            echo "CMD: $cmd"
+          for cmd in "${CMDS[@]}"; do
+            echo "=== $cmd ==="
             eval "$cmd" 2>&1
-            echo "Exit: $?"
-
-            echo "Searching for Assets.car..."
-            find output /var/folders -name "Assets.car" -newer Assets.xcassets 2>/dev/null | while read f; do
-              echo "FOUND: $f ($(wc -c < "$f") bytes)"
-              cp "$f" output/Assets.car
-            done
-
-            if [ -f output/Assets.car ]; then
-              echo "SUCCESS! Assets.car found"
-             $ACTOOL --info output/Assets.car 2>&1 | head -20
+            FOUND=$(find output /var/folders -name "Assets.car" -newer Assets.xcassets 2>/dev/null | head -1)
+            if [ -n "$FOUND" ] && [ "$(wc -c < "$FOUND")" -gt 100 ]; then
+              cp "$FOUND" output/Assets.car
+              echo "SUCCESS: $(wc -c < output/Assets.car) bytes"
+              xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -20 || true
               break
             fi
           done
-
-      - name: Fallback - build with xcodebuild
-        if: not success() || !startsWith(steps.compile.outputs.result, 'success')
-        run: |
-          if [ -f output/Assets.car ]; then
-            echo "Assets.car already built, skipping xcodebuild"
-            exit 0
-          fi
-
-          echo "=== Fallback: minimal Xcode project ==="
-          mkdir -p build_output
-
-          cat > build.py << 'PYEOF'
-          import subprocess, os, shutil, json
-
-          project_dir = "IconProject"
-          os.makedirs(f"{project_dir}/Assets.xcassets/AppIcon.appiconset", exist_ok=True)
-
-          shutil.copytree("Assets.xcassets/AppIcon.appiconset", f"{project_dir}/Assets.xcassets/AppIcon.appiconset", dirs_exist_ok=True)
-          shutil.copy("Assets.xcassets/Contents.json", f"{project_dir}/Assets.xcassets/Contents.json")
-          shutil.copy("Assets.xcassets/AppIcon.appiconset/Contents.json", f"{project_dir}/Assets.xcassets/AppIcon.appiconset/Contents.json")
-
-          print("Building with xcodebuild...")
-          result = subprocess.run([
-              "xcodebuild", "create-xcframework",
-          ], capture_output=True, text=True)
-          print(result.stdout, result.stderr)
-          PYEOF
-
-          echo "Trying actool with --filter-for-device-idioms..."
-          xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --filter-for-device-idioms iphone ipad --compile --app-icon AppIcon output Assets.xcassets 2>&1
-          find output -name "Assets.car" 2>/dev/null
-
-      - name: Verify and upload
-        run: |
-          if [ ! -f output/Assets.car ]; then
-            echo "ERROR: Assets.car not found"
-            echo "=== output dir ==="
-            ls -la output/ 2>/dev/null || echo "(empty)"
-            exit 1
-          fi
-
-          SIZE=$(wc -c < output/Assets.car)
-          echo "Assets.car size: $SIZE bytes"
-
-          if [ "$SIZE" -lt 100 ]; then
-            echo "ERROR: Assets.car too small"
-            exit 1
-          fi
-
-          echo "=== assetutil info ==="
-          xcrun --sdk iphoneos assetutil --info output/Assets.car 2>/dev/null | head -30 || true
+          [ -f output/Assets.car ] || { echo "FAILED"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
