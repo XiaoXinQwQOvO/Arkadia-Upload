@@ -10,7 +10,7 @@
 - Set CFBundleIconName/CFBundleIcons/CFBundleIcons~ipad in Info.plist (90713)
 """
 
-import os, sys, struct, zlib, plistlib, shutil, json, tempfile, subprocess
+import os, sys, struct, zlib, plistlib, shutil, json, tempfile, subprocess, time
 
 PAGE_SIZE = 0x4000
 
@@ -84,6 +84,15 @@ def fix_info_plist(plist_path):
                 plist['MinimumOSVersion'] = '13.0'
         except ValueError:
             pass
+
+    if 'CFBundleVersion' in plist:
+        try:
+            old_ver = int(str(plist['CFBundleVersion']))
+            plist['CFBundleVersion'] = str(old_ver + 1)
+            print(f"  Bumped CFBundleVersion: {old_ver} -> {old_ver + 1}")
+        except ValueError:
+            plist['CFBundleVersion'] = str(int(time.time()))
+            print(f"  Set CFBundleVersion: {plist['CFBundleVersion']}")
 
     plist['CFBundleIconName'] = 'AppIcon'
     plist['CFBundleIconFiles'] = [
