@@ -5,11 +5,12 @@
 - Remove SC_Info directory (90047)
 - Remove UISupportedDevices from Info.plist (90190)
 - Bump MinimumOSVersion to 13.0 (90068)
-- Generate app icon PNGs in bundle root (90022/90023)
+- Generate app icon PNGs in bundle root (90022)
+- Build Asset Catalog with actool and replace Assets.car (90023/91111)
 - Set CFBundleIconName/CFBundleIcons/CFBundleIcons~ipad in Info.plist (90713)
 """
 
-import os, sys, struct, zlib, plistlib, shutil
+import os, sys, struct, zlib, plistlib, shutil, json, tempfile, subprocess
 
 PAGE_SIZE = 0x4000
 
@@ -35,12 +36,12 @@ def fix_encryption(path):
     offset = 32
     for _ in range(ncmds):
         cmd, cmdsize = struct.unpack_from('<II', data, offset)
-        if cmd == 0x19:  # LC_SEGMENT_64
+        if cmd == 0x19:
             segname = data[offset + 8:offset + 24].rstrip(b'\x00').decode('utf-8', errors='replace')
             if segname == '__TEXT':
                 text_fileoff = struct.unpack_from('<Q', data, offset + 40)[0]
                 text_filesize = struct.unpack_from('<Q', data, offset + 48)[0]
-        elif cmd in (0x21, 0x2C):  # LC_ENCRYPTION_INFO(_64)
+        elif cmd in (0x21, 0x2C):
             enc_offset = offset
         offset += cmdsize
     if enc_offset < 0:
@@ -49,7 +50,7 @@ def fix_encryption(path):
     new_cryptsize = min(max(text_filesize - PAGE_SIZE, 0), 0xFFFFFFFF)
     struct.pack_into('<I', data, enc_offset + 8, new_cryptoff)
     struct.pack_into('<I', data, enc_offset + 12, new_cryptsize)
-    struct.pack_into('<I', data, enc_offset + 16, 0)  # cryptid=0
+    struct.pack_into('<I', data, enc_offset + 16, 0)
     with open(path, 'wb') as f:
         f.write(data)
     print(f"  Fixed encryption: cryptoff=0x{new_cryptoff:x} cryptsize=0x{new_cryptsize:x} cryptid=0")
@@ -104,6 +105,82 @@ def install_icons(app_bundle):
     print(f"  Generated {len(icons)} icon files")
 
 
+def build_asset_catalog(app_bundle):
+    """Build Assets.car with actool and replace the one in the bundle."""
+    tmp = tempfile.mkdtemp(prefix='assetcat_')
+    xcassets = os.path.join(tmp, 'Assets.xcassets')
+    appiconset = os.path.join(xcassets, 'AppIcon.appiconset')
+    os.makedirs(appiconset, exist_ok=True)
+
+    icon_files = {
+        'icon-29.png': 29, 'icon-29@2x.png': 58, 'icon-29@3x.png': 87,
+        'icon-40.png': 40, 'icon-40@2x.png': 80, 'icon-40@3x.png': 120,
+        'icon-60@2x.png': 120, 'icon-60@3x.png': 180,
+        'icon-76.png': 76, 'icon-76@2x.png': 152, 'icon-83.5@2x.png': 167,
+        'icon-1024.png': 1024,
+    }
+    for name, px in icon_files.items():
+        with open(os.path.join(appiconset, name), 'wb') as f:
+            f.write(make_png(px, px))
+
+    images = [
+        {"filename": "icon-29.png", "idiom": "iphone", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "iphone", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-29@3x.png", "idiom": "iphone", "scale": "3x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "iphone", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "iphone", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-40@3x.png", "idiom": "iphone", "scale": "3x", "size": "40x40"},
+        {"filename": "icon-60@2x.png", "idiom": "iphone", "scale": "2x", "size": "60x60"},
+        {"filename": "icon-60@3x.png", "idiom": "iphone", "scale": "3x", "size": "60x60"},
+        {"filename": "icon-29.png", "idiom": "ipad", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "ipad", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "ipad", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "ipad", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-76.png", "idiom": "ipad", "scale": "1x", "size": "76x76"},
+        {"filename": "icon-76@2x.png", "idiom": "ipad", "scale": "2x", "size": "76x76"},
+        {"filename": "icon-83.5@2x.png", "idiom": "ipad", "scale": "2x", "size": "83.5x83.5"},
+        {"filename": "icon-1024.png", "idiom": "ios-marketing", "scale": "1x", "size": "1024x1024"},
+    ]
+    with open(os.path.join(appiconset, 'Contents.json'), 'w') as f:
+        json.dump({"images": images, "info": {"author": "xcode", "version": 1}}, f, indent=2)
+    with open(os.path.join(xcassets, 'Contents.json'), 'w') as f:
+        json.dump({"info": {"author": "xcode", "version": 1}}, f)
+
+    output_dir = os.path.join(tmp, 'output')
+    os.makedirs(output_dir, exist_ok=True)
+    partial_plist = os.path.join(tmp, 'partial.plist')
+
+    print("  Compiling Asset Catalog with actool...")
+    result = subprocess.run([
+        'xcrun', 'actool', xcassets,
+        '--compile', output_dir,
+        '--platform', 'iphoneos',
+        '--minimum-deployment-target', '13.0',
+        '--app-icon', 'AppIcon',
+        '--output-partial-info-plist', partial_plist,
+        '--target-device', 'iphone',
+        '--target-device', 'ipad',
+        '--warnings', '--errors',
+    ], capture_output=True, text=True)
+
+    if result.stdout.strip():
+        print(f"  actool stdout: {result.stdout.strip()}")
+    if result.stderr.strip():
+        print(f"  actool stderr: {result.stderr.strip()}")
+
+    car_path = os.path.join(output_dir, 'Assets.car')
+    if os.path.exists(car_path) and os.path.getsize(car_path) > 100:
+        dest = os.path.join(app_bundle, 'Assets.car')
+        shutil.copy2(car_path, dest)
+        print(f"  Replaced Assets.car ({os.path.getsize(dest)} bytes)")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return True
+    else:
+        print("  actool did not produce Assets.car")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return False
+
+
 def main():
     app = sys.argv[1]
     print(f"Preparing: {app}")
@@ -126,6 +203,11 @@ def main():
         fix_info_plist(plist)
 
     install_icons(app)
+
+    print("  Building Asset Catalog...")
+    if not build_asset_catalog(app):
+        print("  WARNING: Assets.car not replaced, upload may fail with 90023/91111")
+
     print("Done!")
 
 
