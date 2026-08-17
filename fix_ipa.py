@@ -215,17 +215,37 @@ def build_asset_catalog(app_bundle):
         print(f"  Existing Assets.car: {os.path.getsize(existing_car)} bytes")
 
     print("  Compiling Asset Catalog with actool (Xcode 14+ universal format)...")
-    cmd = [
-        'xcrun', 'actool',
-        '--output-format', 'human-readable-text',
-        '--minimum-deployment-target', '13.0',
-        '--platform', 'iphoneos',
-        '--target-device', 'iphone',
-        '--target-device', 'ipad',
-        '--compile',
-        '--output', output_dir,
-        xcassets,
-    ]
+    try:
+        find_result = subprocess.run(['xcrun', '--find', 'actool'], capture_output=True, text=True, check=True)
+        actool_path = find_result.stdout.strip()
+        print(f"  actool path: {actool_path}")
+    except Exception:
+        actool_path = 'xcrun'
+
+    if actool_path and actool_path != 'xcrun':
+        cmd = [
+            actool_path,
+            '--output-format', 'human-readable-text',
+            '--minimum-deployment-target', '13.0',
+            '--platform', 'iphoneos',
+            '--target-device', 'iphone',
+            '--target-device', 'ipad',
+            '--compile',
+            '--output', output_dir,
+            xcassets,
+        ]
+    else:
+        cmd = [
+            'xcrun', 'actool',
+            '--output-format', 'human-readable-text',
+            '--minimum-deployment-target', '13.0',
+            '--platform', 'iphoneos',
+            '--target-device', 'iphone',
+            '--target-device', 'ipad',
+            '--compile',
+            '--output', output_dir,
+            xcassets,
+        ]
     print(f"  cmd: {' '.join(cmd)}")
 
     try:
