@@ -2,11 +2,12 @@
 """Fix IPA for App Store Connect / TestFlight upload.
 
 Handles:
-- Completely remove LC_ENCRYPTION_INFO_64 load command (fixes 90180/90209)
+- Fix LC_ENCRYPTION_INFO_64: set cryptid=0, correct cryptoff/cryptsize (fixes 90180/90209/90125)
 - Remove SC_Info directory (fixes 90047)
 - Remove invalid Info.plist keys like UISupportedDevices (fixes 90190)
 - Bump MinimumOSVersion to 13.0 (fixes 90068 warning)
-- Build Asset Catalog with 1024x1024 icon and replace Assets.car (fixes 90023/91111)
+- Add CFBundleIconName + CFBundleIcons to Info.plist (fixes 90713)
+- Generate icon PNGs in bundle root + compile Asset Catalog (fixes 90022/90023/91111)
 """
 
 import os
@@ -18,6 +19,8 @@ import shutil
 import json
 import tempfile
 import subprocess
+
+PAGE_SIZE = 0x4000  # 16384, arm64 page size
 
 
 def make_png(width, height, rgba=(80, 120, 200, 255)):
@@ -33,8 +36,8 @@ def make_png(width, height, rgba=(80, 120, 200, 255)):
     return sig + ihdr + idat + iend
 
 
-def remove_encryption_lc(path):
-    """Completely remove LC_ENCRYPTION_INFO / LC_ENCRYPTION_INFO_64 from Mach-O."""
+def fix_encryption(path):
+    """Fix LC_ENCRYPTION_INFO_64: set cryptid=0 and correct extents from __TEXT segment."""
     with open(path, 'rb') as f:
         data = bytearray(f.read())
 
@@ -46,76 +49,53 @@ def remove_encryption_lc(path):
     ncmds = struct.unpack_from('<I', data, 16)[0]
     sizeofcmds = struct.unpack_from('<I', data, 20)[0]
     header_size = 32
-    lc_region_end = header_size + sizeofcmds
 
+    text_filesize = 0
     enc_offset = -1
     enc_cmdsize = 0
+
     offset = header_size
     for i in range(ncmds):
         cmd, cmdsize = struct.unpack_from('<II', data, offset)
-        if cmd in (0x21, 0x2C):
+        if cmd == 0x19:  # LC_SEGMENT_64
+            segname = data[offset + 8:offset + 24].rstrip(b'\x00').decode('utf-8', errors='replace')
+            filesize = struct.unpack_from('<Q', data, offset + 56)[0]
+            if segname == '__TEXT':
+                text_filesize = filesize
+                print(f"  __TEXT filesize = {text_filesize} (0x{text_filesize:x})")
+        elif cmd in (0x21, 0x2C):
             lc_name = "LC_ENCRYPTION_INFO_64" if cmd == 0x2C else "LC_ENCRYPTION_INFO"
-            cryptid = struct.unpack_from('<I', data, offset + 16)[0]
-            print(f"  Found {lc_name}: cryptid={cryptid} cmdsize={cmdsize} at offset={offset}")
+            old_cryptoff = struct.unpack_from('<I', data, offset + 8)[0]
+            old_cryptsize = struct.unpack_from('<I', data, offset + 12)[0]
+            old_cryptid = struct.unpack_from('<I', data, offset + 16)[0]
+            print(f"  {lc_name}: cryptoff=0x{old_cryptoff:x} cryptsize=0x{old_cryptsize:x} cryptid={old_cryptid}")
             enc_offset = offset
             enc_cmdsize = cmdsize
-            break
         offset += cmdsize
 
     if enc_offset < 0:
-        print(f"  No encryption LC found")
+        print(f"  No encryption LC found, skipping")
         return False
 
-    total_len = len(data)
-    new_len = total_len - enc_cmdsize
-    new_data = bytearray(new_len)
+    new_cryptoff = PAGE_SIZE
+    new_cryptsize = text_filesize - PAGE_SIZE
+    if new_cryptsize < 0:
+        new_cryptsize = 0
+    new_cryptid = 0
 
-    new_data[:enc_offset] = data[:enc_offset]
-    new_data[enc_offset:lc_region_end - enc_cmdsize] = data[enc_offset + enc_cmdsize:lc_region_end]
-    new_content_start = lc_region_end - enc_cmdsize
-    new_data[new_content_start:] = data[lc_region_end:]
+    print(f"  Setting: cryptoff=0x{new_cryptoff:x} cryptsize=0x{new_cryptsize:x} cryptid={new_cryptid}")
 
-    struct.pack_into('<I', new_data, 16, ncmds - 1)
-    struct.pack_into('<I', new_data, 20, sizeofcmds - enc_cmdsize)
-
-    new_ncmds = ncmds - 1
-    offset = header_size
-    for i in range(new_ncmds):
-        cmd, cmdsize = struct.unpack_from('<II', new_data, offset)
-
-        if cmd == 0x19:  # LC_SEGMENT_64
-            fileoff = struct.unpack_from('<Q', new_data, offset + 40)[0]
-            filesize = struct.unpack_from('<Q', new_data, offset + 56)[0]
-            if filesize > 0 and fileoff >= lc_region_end:
-                struct.pack_into('<Q', new_data, offset + 40, fileoff - enc_cmdsize)
-        elif cmd == 0x1:  # LC_SEGMENT
-            fileoff = struct.unpack_from('<I', new_data, offset + 8)[0]
-            filesize = struct.unpack_from('<I', new_data, offset + 12)[0]
-            if filesize > 0 and fileoff >= lc_region_end:
-                struct.pack_into('<I', new_data, offset + 8, fileoff - enc_cmdsize)
-        elif cmd == 0x1D:  # LC_CODE_SIGNATURE
-            val = struct.unpack_from('<I', new_data, offset + 8)[0]
-            if val >= lc_region_end:
-                struct.pack_into('<I', new_data, offset + 8, val - enc_cmdsize)
-        elif cmd in (0x22, 0x80000022):  # LC_DYLD_INFO / LC_DYLD_INFO_ONLY
-            for fo in [8, 16, 24, 32, 40]:
-                val = struct.unpack_from('<I', new_data, offset + fo)[0]
-                if val >= lc_region_end:
-                    struct.pack_into('<I', new_data, offset + fo, val - enc_cmdsize)
-        elif cmd in (0x26, 0x1E, 0x29, 0x2E, 0x2A):  # various link edit commands
-            val = struct.unpack_from('<I', new_data, offset + 8)[0]
-            if val >= lc_region_end:
-                struct.pack_into('<I', new_data, offset + 8, val - enc_cmdsize)
-
-        offset += cmdsize
+    struct.pack_into('<I', data, enc_offset + 8, new_cryptoff)
+    struct.pack_into('<I', data, enc_offset + 12, new_cryptsize)
+    struct.pack_into('<I', data, enc_offset + 16, new_cryptid)
 
     with open(path, 'wb') as f:
-        f.write(new_data)
-    print(f"  Removed encryption LC, file {total_len} -> {new_len} bytes")
+        f.write(data)
+    print(f"  Fixed encryption info in {path}")
     return True
 
 
-def fix_info_plist(plist_path):
+def fix_info_plist(plist_path, app_bundle):
     with open(plist_path, 'rb') as f:
         plist = plistlib.load(f)
 
@@ -124,7 +104,7 @@ def fix_info_plist(plist_path):
     for key in ['UISupportedDevices']:
         if key in plist:
             del plist[key]
-            print(f"  Removed {key} from Info.plist")
+            print(f"  Removed {key}")
             changed = True
 
     if 'MinimumOSVersion' in plist:
@@ -137,11 +117,28 @@ def fix_info_plist(plist_path):
         except ValueError:
             pass
 
-    for key in ['CFBundleIcons', 'CFBundleIcons~ipad', 'CFBundleIconFiles', 'CFBundleIconName']:
-        if key in plist:
-            del plist[key]
-            print(f"  Removed {key} from Info.plist (using Asset Catalog)")
-            changed = True
+    plist['CFBundleIconName'] = 'AppIcon'
+    print(f"  Set CFBundleIconName = AppIcon")
+    changed = True
+
+    plist['CFBundleIcons'] = {
+        'CFBundlePrimaryIcon': {
+            'CFBundleIconFiles': ['Icon-120', 'Icon-80', 'Icon-60', 'Icon-40', 'Icon-29'],
+            'CFBundleIconName': 'AppIcon',
+        }
+    }
+    plist['CFBundleIcons~ipad'] = {
+        'CFBundlePrimaryIcon': {
+            'CFBundleIconFiles': ['Icon-167', 'Icon-152', 'Icon-120', 'Icon-80', 'Icon-76', 'Icon-40', 'Icon-29'],
+            'CFBundleIconName': 'AppIcon',
+        }
+    }
+    plist['CFBundleIconFiles'] = [
+        'Icon-120', 'Icon-80', 'Icon-60', 'Icon-40', 'Icon-29',
+        'Icon-152', 'Icon-167', 'Icon-76',
+    ]
+    print(f"  Set CFBundleIcons / CFBundleIcons~ipad / CFBundleIconFiles")
+    changed = True
 
     if changed:
         with open(plist_path, 'wb') as f:
@@ -150,26 +147,72 @@ def fix_info_plist(plist_path):
     return changed
 
 
+def install_icon_files(app_bundle):
+    icons = {
+        'Icon-1024.png': (1024, 1024),
+        'Icon-167.png': (167, 167),
+        'Icon-152.png': (152, 152),
+        'Icon-120.png': (120, 120),
+        'Icon-80.png': (80, 80),
+        'Icon-76.png': (76, 76),
+        'Icon-60.png': (60, 60),
+        'Icon-40.png': (40, 40),
+        'Icon-29.png': (29, 29),
+    }
+    for name, (w, h) in icons.items():
+        path = os.path.join(app_bundle, name)
+        with open(path, 'wb') as f:
+            f.write(make_png(w, h))
+        print(f"  Generated {name} ({w}x{h})")
+
+
 def build_asset_catalog(app_bundle):
-    """Build a complete AppIcon Asset Catalog and replace Assets.car."""
+    """Build Asset Catalog with ALL explicit icon sizes and replace Assets.car."""
     tmp = tempfile.mkdtemp(prefix='assetcat_')
     xcassets = os.path.join(tmp, 'Assets.xcassets')
     appiconset = os.path.join(xcassets, 'AppIcon.appiconset')
     os.makedirs(appiconset, exist_ok=True)
 
-    icon_1024_path = os.path.join(appiconset, 'icon-1024.png')
-    with open(icon_1024_path, 'wb') as f:
-        f.write(make_png(1024, 1024))
+    icon_files = {
+        'icon-29.png': 29,
+        'icon-29@2x.png': 58,
+        'icon-29@3x.png': 87,
+        'icon-40.png': 40,
+        'icon-40@2x.png': 80,
+        'icon-40@3x.png': 120,
+        'icon-60@2x.png': 120,
+        'icon-60@3x.png': 180,
+        'icon-76.png': 76,
+        'icon-76@2x.png': 152,
+        'icon-83.5@2x.png': 167,
+        'icon-1024.png': 1024,
+    }
+
+    for name, px in icon_files.items():
+        with open(os.path.join(appiconset, name), 'wb') as f:
+            f.write(make_png(px, px))
+
+    images = [
+        {"filename": "icon-29.png", "idiom": "iphone", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "iphone", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-29@3x.png", "idiom": "iphone", "scale": "3x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "iphone", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "iphone", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-40@3x.png", "idiom": "iphone", "scale": "3x", "size": "40x40"},
+        {"filename": "icon-60@2x.png", "idiom": "iphone", "scale": "2x", "size": "60x60"},
+        {"filename": "icon-60@3x.png", "idiom": "iphone", "scale": "3x", "size": "60x60"},
+        {"filename": "icon-29.png", "idiom": "ipad", "scale": "1x", "size": "29x29"},
+        {"filename": "icon-29@2x.png", "idiom": "ipad", "scale": "2x", "size": "29x29"},
+        {"filename": "icon-40.png", "idiom": "ipad", "scale": "1x", "size": "40x40"},
+        {"filename": "icon-40@2x.png", "idiom": "ipad", "scale": "2x", "size": "40x40"},
+        {"filename": "icon-76.png", "idiom": "ipad", "scale": "1x", "size": "76x76"},
+        {"filename": "icon-76@2x.png", "idiom": "ipad", "scale": "2x", "size": "76x76"},
+        {"filename": "icon-83.5@2x.png", "idiom": "ipad", "scale": "2x", "size": "83.5x83.5"},
+        {"filename": "icon-1024.png", "idiom": "ios-marketing", "scale": "1x", "size": "1024x1024"},
+    ]
 
     contents_json = {
-        "images": [
-            {
-                "filename": "icon-1024.png",
-                "idiom": "universal",
-                "platform": "ios",
-                "size": "1024x1024"
-            }
-        ],
+        "images": images,
         "info": {"author": "xcode", "version": 1}
     }
     with open(os.path.join(appiconset, 'Contents.json'), 'w') as f:
@@ -192,7 +235,8 @@ def build_asset_catalog(app_bundle):
             '--output', output_dir,
             xcassets
         ], check=True, capture_output=True, text=True)
-        print(f"  actool stdout: {result.stdout.strip()}")
+        if result.stdout.strip():
+            print(f"  actool: {result.stdout.strip()}")
     except subprocess.CalledProcessError as e:
         print(f"  actool FAILED: {e.stderr}")
         shutil.rmtree(tmp, ignore_errors=True)
@@ -234,7 +278,7 @@ def main():
     binary_path = os.path.join(app_bundle, app_name)
     if os.path.exists(binary_path):
         print(f"Fixing Mach-O: {binary_path}")
-        remove_encryption_lc(binary_path)
+        fix_encryption(binary_path)
     else:
         for name in os.listdir(app_bundle):
             candidate = os.path.join(app_bundle, name)
@@ -244,7 +288,7 @@ def main():
                         m = f.read(4)
                     if m == b'\xcf\xfa\xfe\xed':
                         print(f"Fixing Mach-O: {candidate}")
-                        remove_encryption_lc(candidate)
+                        fix_encryption(candidate)
                         break
                 except Exception:
                     pass
@@ -252,7 +296,10 @@ def main():
     plist_path = os.path.join(app_bundle, 'Info.plist')
     if os.path.exists(plist_path):
         print("Fixing Info.plist")
-        fix_info_plist(plist_path)
+        fix_info_plist(plist_path, app_bundle)
+
+    print("Installing icon files in bundle root")
+    install_icon_files(app_bundle)
 
     print("Building Asset Catalog (replacing Assets.car)")
     build_asset_catalog(app_bundle)
