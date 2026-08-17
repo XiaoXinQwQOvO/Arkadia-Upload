@@ -214,91 +214,64 @@ def build_asset_catalog(app_bundle):
     if os.path.exists(existing_car):
         print(f"  Existing Assets.car: {os.path.getsize(existing_car)} bytes")
 
-    print("  Compiling Asset Catalog with actool (Xcode 14+ universal format)...")
+    print("  Compiling Asset Catalog with actool...")
 
-    try:
-        help_result = subprocess.run('xcrun actool --help 2>&1 | head -50', shell=True, capture_output=True, text=True)
-        print(f"  actool --help: {help_result.stdout[:1000]}")
-    except Exception:
-        pass
+    found_car = None
 
-    cmd_str = (
-        f'xcrun actool '
-        f'--output-format human-readable-text '
-        f'--minimum-deployment-target 13.0 '
-        f'--platform iphoneos '
-        f'--target-device iphone '
-        f'--target-device ipad '
-        f'--compile '
-        f'"{output_dir}" '
-        f'"{xcassets}"'
-    )
-    print(f"  cmd: {cmd_str}")
+    attempts = [
+        ('cd output, compile input', f'cd "{output_dir}" && xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile "{xcassets}"'),
+        ('compile output input', f'xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile "{output_dir}" "{xcassets}"'),
+        ('compile input output', f'xcrun actool --platform iphoneos --minimum-deployment-target 13.0 --compile "{xcassets}" "{output_dir}"'),
+    ]
 
-    try:
-        result = subprocess.run(cmd_str, shell=True, check=True, capture_output=True, text=True)
-        print(f"  actool stdout: {result.stdout.strip()}")
-        if result.stderr.strip():
-            print(f"  actool stderr: {result.stderr.strip()}")
-    except subprocess.CalledProcessError as e:
-        print(f"  actool FAILED (exit {e.returncode})")
-        print(f"  stdout: {e.stdout}")
-        print(f"  stderr: {e.stderr}")
-
-        print("  Retrying with input before output...")
-        cmd_str2 = (
-            f'xcrun actool '
-            f'--output-format human-readable-text '
-            f'--minimum-deployment-target 13.0 '
-            f'--platform iphoneos '
-            f'--compile '
-            f'"{xcassets}" '
-            f'"{output_dir}"'
-        )
-        print(f"  cmd: {cmd_str2}")
+    for desc, cmd_str in attempts:
+        print(f"  Attempt: {desc}")
+        print(f"  cmd: {cmd_str}")
         try:
-            result = subprocess.run(cmd_str2, shell=True, check=True, capture_output=True, text=True)
-            print(f"  actool stdout: {result.stdout.strip()}")
+            result = subprocess.run(cmd_str, shell=True, check=True, capture_output=True, text=True)
+            print(f"  stdout: {result.stdout.strip()}")
             if result.stderr.strip():
-                print(f"  actool stderr: {result.stderr.strip()}")
-        except subprocess.CalledProcessError as e2:
-            print(f"  actool FAILED (exit {e2.returncode})")
-            print(f"  stdout: {e2.stdout}")
-            print(f"  stderr: {e2.stderr}")
-            shutil.rmtree(tmp, ignore_errors=True)
-            return False
+                print(f"  stderr: {result.stderr.strip()}")
+        except subprocess.CalledProcessError as e:
+            print(f"  FAILED (exit {e.returncode}): {e.stdout.strip()}")
+            if e.stderr.strip():
+                print(f"  stderr: {e.stderr.strip()}")
+            continue
 
-    car_path = os.path.join(output_dir, 'Assets.car')
-    if os.path.exists(car_path):
-        car_size = os.path.getsize(car_path)
-        print(f"  Compiled Assets.car: {car_size} bytes")
-        if car_size < 100:
-            print("  WARNING: Assets.car too small, likely corrupt")
-            shutil.rmtree(tmp, ignore_errors=True)
-            return False
-        shutil.copy2(car_path, existing_car)
-        print(f"  Replaced Assets.car")
+        search_cmd = f'find "{output_dir}" /var/folders -name "Assets.car" -newer "{xcassets}" 2>/dev/null | head -5'
+        search_result = subprocess.run(search_cmd, shell=True, capture_output=True, text=True)
+        print(f"  Search: {search_result.stdout.strip()}")
 
-        try:
-            info = subprocess.run(
-                ['xcrun', '--sdk', 'iphoneos', 'assetutil', '--info', existing_car],
-                capture_output=True, text=True, timeout=10
-            )
-            if info.stdout.strip():
-                lines = info.stdout.strip().split('\n')
-                for line in lines:
-                    if 'AppIcon' in line or '1024' in line or '167' in line or '152' in line:
-                        print(f"  car: {line.strip()}")
-        except Exception:
-            pass
+        for line in search_result.stdout.strip().split('\n'):
+            line = line.strip()
+            if line and os.path.exists(line):
+                found_car = line
+                print(f"  Found: {found_car} ({os.path.getsize(found_car)} bytes)")
+                break
 
-        shutil.rmtree(tmp, ignore_errors=True)
-        return True
-    else:
-        print("  Assets.car not found in actool output")
-        print(f"  output dir contents: {os.listdir(output_dir)}")
+        if not found_car:
+            cwd_search = subprocess.run('find . -name "Assets.car" -maxdepth 3 2>/dev/null | head -5', shell=True, capture_output=True, text=True)
+            print(f"  CWD search: {cwd_search.stdout.strip()}")
+            for line in cwd_search.stdout.strip().split('\n'):
+                line = line.strip()
+                if line and os.path.exists(line):
+                    found_car = line
+                    print(f"  Found in CWD: {found_car} ({os.path.getsize(found_car)} bytes)")
+                    break
+
+        if found_car:
+            break
+
+    if not found_car:
+        print("  Assets.car not found after all attempts")
         shutil.rmtree(tmp, ignore_errors=True)
         return False
+
+    dest = os.path.join(app_bundle, 'Assets.car')
+    shutil.copy2(found_car, dest)
+    print(f"  Replaced Assets.car ({os.path.getsize(dest)} bytes)")
+    shutil.rmtree(tmp, ignore_errors=True)
+    return True
 
 
 def main():
