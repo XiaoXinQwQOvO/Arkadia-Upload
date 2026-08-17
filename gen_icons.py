@@ -14,6 +14,21 @@ import os, sys, struct, zlib, plistlib, shutil, json, tempfile, subprocess
 
 PAGE_SIZE = 0x4000
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+SOURCE_ICONS = {
+    1024: os.path.join(SCRIPT_DIR, '1024x1024.png'),
+    167: os.path.join(SCRIPT_DIR, '167x167.png'),
+    152: os.path.join(SCRIPT_DIR, '152x152.png'),
+}
+
+
+def get_icon(px):
+    if px in SOURCE_ICONS and os.path.exists(SOURCE_ICONS[px]):
+        with open(SOURCE_ICONS[px], 'rb') as f:
+            return f.read()
+    return make_png(px, px)
+
 
 def make_png(w, h, rgba=(80, 120, 200, 255)):
     def chunk(t, d):
@@ -101,7 +116,7 @@ def install_icons(app_bundle):
     }
     for name, px in icons.items():
         with open(os.path.join(app_bundle, name), 'wb') as f:
-            f.write(make_png(px, px))
+            f.write(get_icon(px))
     print(f"  Generated {len(icons)} icon files")
 
 
@@ -121,7 +136,7 @@ def build_asset_catalog(app_bundle):
     }
     for name, px in icon_files.items():
         with open(os.path.join(appiconset, name), 'wb') as f:
-            f.write(make_png(px, px))
+            f.write(get_icon(px))
 
     images = [
         {"filename": "icon-29.png", "idiom": "iphone", "scale": "1x", "size": "29x29"},
