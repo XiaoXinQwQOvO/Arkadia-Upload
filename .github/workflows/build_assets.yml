@@ -24,7 +24,7 @@ jobs:
 
       - name: Build cartool (Assets.car decompiler)
         run: |
-          git clone --depth 1 https://github.com/insidegui/cartool.git /tmp/cartool
+          git -c credential.helper= clone --depth 1 https://github.com/insidegui/cartool.git /tmp/cartool
           cd /tmp/cartool
           xcodebuild -project cartool.xcodeproj -scheme cartool -configuration Release build SYMROOT="$(pwd)/build" CODE_SIGNING_ALLOWED=NO
           sudo cp build/Release/cartool /usr/local/bin/cartool
