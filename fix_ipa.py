@@ -126,21 +126,25 @@ def fix_info_plist(plist_path, app_bundle):
     print(f"  Set CFBundleIconName = AppIcon")
     changed = True
 
+    plist['UIDeviceFamily'] = [1, 2]
+    print(f"  Set UIDeviceFamily = [1, 2]")
+    changed = True
+
     plist['CFBundleIcons'] = {
         'CFBundlePrimaryIcon': {
-            'CFBundleIconFiles': ['Icon-120', 'Icon-80', 'Icon-60', 'Icon-40', 'Icon-29'],
+            'CFBundleIconFiles': ['Icon-120', 'Icon-60@2x', 'Icon-80', 'Icon-40@2x', 'Icon-60', 'Icon-40', 'Icon-29'],
             'CFBundleIconName': 'AppIcon',
         }
     }
     plist['CFBundleIcons~ipad'] = {
         'CFBundlePrimaryIcon': {
-            'CFBundleIconFiles': ['Icon-167', 'Icon-152', 'Icon-120', 'Icon-80', 'Icon-76', 'Icon-40', 'Icon-29'],
+            'CFBundleIconFiles': ['Icon-167', 'Icon-83.5@2x', 'Icon-152', 'Icon-76@2x', 'Icon-120', 'Icon-80', 'Icon-76', 'Icon-40', 'Icon-29'],
             'CFBundleIconName': 'AppIcon',
         }
     }
     plist['CFBundleIconFiles'] = [
-        'Icon-120', 'Icon-80', 'Icon-60', 'Icon-40', 'Icon-29',
-        'Icon-152', 'Icon-167', 'Icon-76',
+        'Icon-120', 'Icon-60@2x', 'Icon-80', 'Icon-40@2x', 'Icon-60', 'Icon-40', 'Icon-29',
+        'Icon-152', 'Icon-76@2x', 'Icon-167', 'Icon-83.5@2x', 'Icon-76',
     ]
     print(f"  Set CFBundleIcons / CFBundleIcons~ipad / CFBundleIconFiles")
     changed = True
@@ -163,6 +167,11 @@ def install_icon_files(app_bundle):
         'Icon-60.png': (60, 60),
         'Icon-40.png': (40, 40),
         'Icon-29.png': (29, 29),
+        'Icon-76@2x.png': (152, 152),
+        'Icon-83.5@2x.png': (167, 167),
+        'Icon-60@2x.png': (120, 120),
+        'Icon-40@2x.png': (80, 80),
+        'Icon-29@2x.png': (58, 58),
     }
     for name, (w, h) in icons.items():
         path = os.path.join(app_bundle, name)
@@ -172,52 +181,24 @@ def install_icon_files(app_bundle):
 
 
 def build_asset_catalog(app_bundle):
-    """Build Asset Catalog with ALL explicit icon sizes and replace Assets.car."""
+    """Build Asset Catalog with 1024x1024 universal icon and replace Assets.car."""
     tmp = tempfile.mkdtemp(prefix='assetcat_')
     xcassets = os.path.join(tmp, 'Assets.xcassets')
     appiconset = os.path.join(xcassets, 'AppIcon.appiconset')
     os.makedirs(appiconset, exist_ok=True)
 
-    icon_files = {
-        'icon-29.png': 29,
-        'icon-29@2x.png': 58,
-        'icon-29@3x.png': 87,
-        'icon-40.png': 40,
-        'icon-40@2x.png': 80,
-        'icon-40@3x.png': 120,
-        'icon-60@2x.png': 120,
-        'icon-60@3x.png': 180,
-        'icon-76.png': 76,
-        'icon-76@2x.png': 152,
-        'icon-83.5@2x.png': 167,
-        'icon-1024.png': 1024,
-    }
-
-    for name, px in icon_files.items():
-        with open(os.path.join(appiconset, name), 'wb') as f:
-            f.write(make_png(px, px))
-
-    images = [
-        {"filename": "icon-29.png", "idiom": "iphone", "scale": "1x", "size": "29x29"},
-        {"filename": "icon-29@2x.png", "idiom": "iphone", "scale": "2x", "size": "29x29"},
-        {"filename": "icon-29@3x.png", "idiom": "iphone", "scale": "3x", "size": "29x29"},
-        {"filename": "icon-40.png", "idiom": "iphone", "scale": "1x", "size": "40x40"},
-        {"filename": "icon-40@2x.png", "idiom": "iphone", "scale": "2x", "size": "40x40"},
-        {"filename": "icon-40@3x.png", "idiom": "iphone", "scale": "3x", "size": "40x40"},
-        {"filename": "icon-60@2x.png", "idiom": "iphone", "scale": "2x", "size": "60x60"},
-        {"filename": "icon-60@3x.png", "idiom": "iphone", "scale": "3x", "size": "60x60"},
-        {"filename": "icon-29.png", "idiom": "ipad", "scale": "1x", "size": "29x29"},
-        {"filename": "icon-29@2x.png", "idiom": "ipad", "scale": "2x", "size": "29x29"},
-        {"filename": "icon-40.png", "idiom": "ipad", "scale": "1x", "size": "40x40"},
-        {"filename": "icon-40@2x.png", "idiom": "ipad", "scale": "2x", "size": "40x40"},
-        {"filename": "icon-76.png", "idiom": "ipad", "scale": "1x", "size": "76x76"},
-        {"filename": "icon-76@2x.png", "idiom": "ipad", "scale": "2x", "size": "76x76"},
-        {"filename": "icon-83.5@2x.png", "idiom": "ipad", "scale": "2x", "size": "83.5x83.5"},
-        {"filename": "icon-1024.png", "idiom": "ios-marketing", "scale": "1x", "size": "1024x1024"},
-    ]
+    with open(os.path.join(appiconset, 'icon-1024.png'), 'wb') as f:
+        f.write(make_png(1024, 1024))
 
     contents_json = {
-        "images": images,
+        "images": [
+            {
+                "filename": "icon-1024.png",
+                "idiom": "universal",
+                "platform": "ios",
+                "size": "1024x1024"
+            }
+        ],
         "info": {"author": "xcode", "version": 1}
     }
     with open(os.path.join(appiconset, 'Contents.json'), 'w') as f:
@@ -229,21 +210,33 @@ def build_asset_catalog(app_bundle):
     output_dir = os.path.join(tmp, 'output')
     os.makedirs(output_dir, exist_ok=True)
 
-    print("  Compiling Asset Catalog with actool...")
+    existing_car = os.path.join(app_bundle, 'Assets.car')
+    if os.path.exists(existing_car):
+        print(f"  Existing Assets.car: {os.path.getsize(existing_car)} bytes")
+
+    print("  Compiling Asset Catalog with actool (Xcode 14+ universal format)...")
+    cmd = [
+        'xcrun', 'actool',
+        '--output-format', 'human-readable-text',
+        '--minimum-deployment-target', '13.0',
+        '--platform', 'iphoneos',
+        '--target-device', 'iphone',
+        '--target-device', 'ipad',
+        '--compile',
+        '--output', output_dir,
+        xcassets,
+    ]
+    print(f"  cmd: {' '.join(cmd)}")
+
     try:
-        result = subprocess.run([
-            'xcrun', 'actool',
-            '--output-format', 'human-readable-text',
-            '--minimum-deployment-target', '13.0',
-            '--platform', 'iphoneos',
-            '--compile',
-            '--output', output_dir,
-            xcassets
-        ], check=True, capture_output=True, text=True)
-        if result.stdout.strip():
-            print(f"  actool: {result.stdout.strip()}")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print(f"  actool stdout: {result.stdout.strip()}")
+        if result.stderr.strip():
+            print(f"  actool stderr: {result.stderr.strip()}")
     except subprocess.CalledProcessError as e:
-        print(f"  actool FAILED: {e.stderr}")
+        print(f"  actool FAILED (exit {e.returncode})")
+        print(f"  stdout: {e.stdout}")
+        print(f"  stderr: {e.stderr}")
         shutil.rmtree(tmp, ignore_errors=True)
         return False
     except FileNotFoundError:
@@ -253,13 +246,33 @@ def build_asset_catalog(app_bundle):
 
     car_path = os.path.join(output_dir, 'Assets.car')
     if os.path.exists(car_path):
-        dest = os.path.join(app_bundle, 'Assets.car')
-        shutil.copy2(car_path, dest)
-        print(f"  Replaced Assets.car ({os.path.getsize(dest)} bytes)")
+        car_size = os.path.getsize(car_path)
+        print(f"  Compiled Assets.car: {car_size} bytes")
+        if car_size < 100:
+            print("  WARNING: Assets.car too small, likely corrupt")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return False
+        shutil.copy2(car_path, existing_car)
+        print(f"  Replaced Assets.car")
+
+        try:
+            info = subprocess.run(
+                ['xcrun', '--sdk', 'iphoneos', 'assetutil', '--info', existing_car],
+                capture_output=True, text=True, timeout=10
+            )
+            if info.stdout.strip():
+                lines = info.stdout.strip().split('\n')
+                for line in lines:
+                    if 'AppIcon' in line or '1024' in line or '167' in line or '152' in line:
+                        print(f"  car: {line.strip()}")
+        except Exception:
+            pass
+
         shutil.rmtree(tmp, ignore_errors=True)
         return True
     else:
         print("  Assets.car not found in actool output")
+        print(f"  output dir contents: {os.listdir(output_dir)}")
         shutil.rmtree(tmp, ignore_errors=True)
         return False
 
